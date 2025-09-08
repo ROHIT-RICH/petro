@@ -46,21 +46,37 @@ const deleteImageFile = async (public_id) => {
 // Admin: Create product
 export const create = async (req, res) => {
   try {
-    let images = [];
+    // Coerce primitives from multipart
+    const body = {
+      title: req.body.title?.trim(),
+      description: req.body.description,
+      category: req.body.category,
+      brand: req.body.brand,
+      price: req.body.price != null ? Number(req.body.price) : undefined,
+      stock: req.body.stock != null ? Number(req.body.stock) : undefined,
+      active:
+        typeof req.body.active === 'string'
+          ? req.body.active === 'true'
+          : Boolean(req.body.active),
+    };
 
-    // Handle uploaded files
-    if (req.files && req.files.length > 0) {
+    if (!body.title) return res.status(400).json({ error: 'title is required' });
+    if (!Number.isFinite(body.price)) return res.status(400).json({ error: 'price must be a number' });
+
+    // Upload images if any
+    const images = [];
+    if (Array.isArray(req.files) && req.files.length > 0) {
       for (const file of req.files) {
-        const result = await cloudinary.uploader.upload(file.path, { folder: "products" });
-        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+        const result = await cloudinary.uploader.upload(file.path, { folder: 'products' });
         images.push({ url: result.secure_url, public_id: result.public_id });
+        try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
       }
     }
 
-    const product = await Product.create({ ...req.body, images });
-    res.status(201).json(product);
+    const product = await Product.create({ ...body, images });
+    return res.status(201).json(product);
   } catch (err) {
-    res.status(400).json({ message: "Error creating product", error: err.message });
+    return res.status(400).json({ message: 'Error creating product', error: err.message });
   }
 };
 
