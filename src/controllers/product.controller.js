@@ -2,6 +2,7 @@ import Product from "../models/Product.js";
 import Order from "../models/Order.js";
 import { v2 as cloudinary } from "cloudinary";
 import fs from "fs";
+import slugify from 'slugify';
 
 // Configure Cloudinary
 cloudinary.config({
@@ -44,11 +45,10 @@ const deleteImageFile = async (public_id) => {
 };
 
 // Admin: Create product
+
+
 export const create = async (req, res) => {
   try {
-    // ------------------------
-    // 1. Parse and validate body
-    // ------------------------
     const body = {
       title: req.body.title?.trim(),
       description: req.body.description,
@@ -65,40 +65,39 @@ export const create = async (req, res) => {
     if (!body.title) return res.status(400).json({ error: 'title is required' });
     if (!Number.isFinite(body.price)) return res.status(400).json({ error: 'price must be a number' });
 
-    // ------------------------
-    // 2. Upload images in parallel
-    // ------------------------
+    // Generate slug
+    body.slug = slugify(body.title, { lower: true, strict: true });
+
+    // Upload images in parallel
     let images = [];
     if (Array.isArray(req.files) && req.files.length > 0) {
       images = await Promise.all(
         req.files.map(async (file) => {
           try {
             const result = await cloudinary.uploader.upload(file.path, { folder: 'products' });
-            // Remove local temp file
             try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
             return { url: result.secure_url, public_id: result.public_id };
           } catch (err) {
             console.error('Cloudinary upload failed for file:', file.path, err);
-            return null; // skip this file instead of failing the request
+            return null;
           }
         })
       );
-
-      // Filter out any failed uploads
       images = images.filter(Boolean);
     }
 
-    // ------------------------
-    // 3. Create product
-    // ------------------------
     const product = await Product.create({ ...body, images });
     return res.status(201).json(product);
 
   } catch (err) {
     console.error('Error creating product:', err);
+    if (err.code === 11000 && err.keyPattern?.slug) {
+      return res.status(400).json({ message: 'Product with this slug already exists' });
+    }
     return res.status(500).json({ message: 'Internal server error', error: err.message });
   }
 };
+
 
 
 
