@@ -234,3 +234,21 @@ export const getStats = async (req, res) => {
     res.status(500).json({ message: "Error fetching stats", error: err.message });
   }
 };
+
+export const categories = async (req, res) => {
+  try {
+    const categories = await Product.distinct("category", { deletedAt: null });
+    res.json(categories);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch categories" });
+  }
+};
+
+export const brands = async (req, res) => {
+  try {
+    const brands = await Product.distinct("brand", { deletedAt: null });
+    res.json(brands);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch brands" });
+  }
+};

@@ -9,7 +9,9 @@ import {
   getStats,
   adminList,
   uploadImages,
-  removeImage, // <-- import this
+  removeImage,
+  categories,
+  brands,
 } from "../controllers/product.controller.js";
 import { auth } from "../middleware/auth.js";
 import { upload } from "../config/cloudinary.js";
@@ -20,6 +22,8 @@ const router = Router();
 router.get("/", list);
 router.get("/stats", auth(["admin"]), getStats);
 router.get("/:id", getOne);
+router.get("/categories/list", categories);
+router.get("/brands/list", brands)
 
 // Admin-only routes
 router.get("/admin/all", auth(["admin"]), adminList);
