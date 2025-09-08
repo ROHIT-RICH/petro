@@ -46,7 +46,9 @@ const deleteImageFile = async (public_id) => {
 // Admin: Create product
 export const create = async (req, res) => {
   try {
-    // Parse and validate body
+    // ------------------------
+    // 1. Parse and validate body
+    // ------------------------
     const body = {
       title: req.body.title?.trim(),
       description: req.body.description,
@@ -63,25 +65,41 @@ export const create = async (req, res) => {
     if (!body.title) return res.status(400).json({ error: 'title is required' });
     if (!Number.isFinite(body.price)) return res.status(400).json({ error: 'price must be a number' });
 
-    // Upload images in parallel
+    // ------------------------
+    // 2. Upload images in parallel
+    // ------------------------
     let images = [];
     if (Array.isArray(req.files) && req.files.length > 0) {
       images = await Promise.all(
         req.files.map(async (file) => {
-          const result = await cloudinary.uploader.upload(file.path, { folder: 'products' });
-          try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
-          return { url: result.secure_url, public_id: result.public_id };
+          try {
+            const result = await cloudinary.uploader.upload(file.path, { folder: 'products' });
+            // Remove local temp file
+            try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
+            return { url: result.secure_url, public_id: result.public_id };
+          } catch (err) {
+            console.error('Cloudinary upload failed for file:', file.path, err);
+            return null; // skip this file instead of failing the request
+          }
         })
       );
+
+      // Filter out any failed uploads
+      images = images.filter(Boolean);
     }
 
-    // Create product
+    // ------------------------
+    // 3. Create product
+    // ------------------------
     const product = await Product.create({ ...body, images });
     return res.status(201).json(product);
+
   } catch (err) {
-    return res.status(500).json({ message: 'Error creating product', error: err.message });
+    console.error('Error creating product:', err);
+    return res.status(500).json({ message: 'Internal server error', error: err.message });
   }
 };
+
 
 
 // Admin: Update product
