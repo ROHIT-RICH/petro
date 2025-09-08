@@ -46,7 +46,7 @@ const deleteImageFile = async (public_id) => {
 // Admin: Create product
 export const create = async (req, res) => {
   try {
-    // Coerce primitives from multipart
+    // Parse and validate body
     const body = {
       title: req.body.title?.trim(),
       description: req.body.description,
@@ -63,22 +63,26 @@ export const create = async (req, res) => {
     if (!body.title) return res.status(400).json({ error: 'title is required' });
     if (!Number.isFinite(body.price)) return res.status(400).json({ error: 'price must be a number' });
 
-    // Upload images if any
-    const images = [];
+    // Upload images in parallel
+    let images = [];
     if (Array.isArray(req.files) && req.files.length > 0) {
-      for (const file of req.files) {
-        const result = await cloudinary.uploader.upload(file.path, { folder: 'products' });
-        images.push({ url: result.secure_url, public_id: result.public_id });
-        try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
-      }
+      images = await Promise.all(
+        req.files.map(async (file) => {
+          const result = await cloudinary.uploader.upload(file.path, { folder: 'products' });
+          try { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); } catch {}
+          return { url: result.secure_url, public_id: result.public_id };
+        })
+      );
     }
 
+    // Create product
     const product = await Product.create({ ...body, images });
     return res.status(201).json(product);
   } catch (err) {
-    return res.status(400).json({ message: 'Error creating product', error: err.message });
+    return res.status(500).json({ message: 'Error creating product', error: err.message });
   }
 };
+
 
 // Admin: Update product
 export const update = async (req, res) => {
