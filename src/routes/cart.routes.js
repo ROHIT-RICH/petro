@@ -19,11 +19,11 @@ router.get('/', getCart);
 // Add item to cart
 router.post('/add', addToCart);
 
-// Update quantity of an item
-router.put('/:productId', updateCartItem);
+// Update quantity of a specific variant
+router.put('/:productId/:variantId', updateCartItem);
 
-// Remove specific item
-router.delete('/:productId', removeFromCart);
+// Remove specific variant (variantId optional)
+router.delete('/:productId/:variantId?', removeFromCart);
 
 // Clear cart
 router.delete('/clear', clearCart);

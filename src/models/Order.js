@@ -3,13 +3,26 @@ import mongoose from 'mongoose';
 const orderSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 
-  // Items in the order
-  items: [{
-    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
-    title: String,
-    price: Number,
-    quantity: Number
-  }],
+  // Items in the order (with variant snapshot)
+  items: [
+    {
+      product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+
+      // Variant reference + snapshot at order time
+      variantId: { type: mongoose.Schema.Types.ObjectId }, 
+      variant: {
+        size: String,    // e.g., "Size M", "Red"
+        price: Number,   // variant price at order time
+        sku: String      // optional unique SKU
+      },
+
+      // Product snapshot
+      title: String,
+      price: Number,     // product price at order time
+      quantity: Number,
+      subtotal: Number   // price * quantity at order time
+    }
+  ],
 
   // Customer information
   customer: {
@@ -30,8 +43,11 @@ const orderSchema = new mongoose.Schema({
     country: String
   },
 
-  // Total amount
+  // Total amount (calculated at order time)
   total: { type: Number, required: true },
+
+  // Delivery charges
+  shipping: { type: Number, default: 0 },
 
   // Order status
   status: { 
@@ -45,15 +61,15 @@ const orderSchema = new mongoose.Schema({
 
 }, { timestamps: true });
 
-// Add virtual populate to fetch payment automatically
+// Virtual populate for payment
 orderSchema.virtual('paymentDetails', {
-  ref: 'Payment',        // The model to populate
+  ref: 'Payment',        // Model to populate
   localField: '_id',     // Order _id
   foreignField: 'order', // Payment.order references this
-  justOne: true          // Each order has only one payment
+  justOne: true
 });
 
-// Make virtuals show in JSON
+// Make virtuals appear in JSON
 orderSchema.set('toObject', { virtuals: true });
 orderSchema.set('toJSON', { virtuals: true });
 
