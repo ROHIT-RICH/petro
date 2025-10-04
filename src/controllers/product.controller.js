@@ -355,8 +355,9 @@ export const updateStock = async (req, res) => {
 /* ------------------ Stats ------------------ */
 export const getStats = async (req, res) => {
   try {
+    // ✅ Include processing, shipped, delivered
     const revenueAgg = await Order.aggregate([
-      { $match: { status: { $ne: "cancelled" } } },
+      { $match: { status: { $in: ["processing", "shipped", "delivered"] } } },
       {
         $group: {
           _id: null,
@@ -370,12 +371,13 @@ export const getStats = async (req, res) => {
     const ordersCount = revenueAgg[0]?.totalOrders || 0;
     const productsCount = await Product.countDocuments({ active: true });
 
+    // ✅ Monthly revenue (last 6 months, only processing/shipped/delivered)
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
     const monthlyRevenueAgg = await Order.aggregate([
       {
         $match: {
-          status: { $ne: "cancelled" },
+          status: { $in: ["processing", "shipped", "delivered"] },
           createdAt: { $gte: sixMonthsAgo },
         },
       },
@@ -405,13 +407,16 @@ export const getStats = async (req, res) => {
       });
     }
 
+    // Orders status distribution (still counts all statuses)
     const ordersStatusAgg = await Order.aggregate([
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
     const ordersStatus = {};
     ordersStatusAgg.forEach((o) => (ordersStatus[o._id] = o.count));
 
+    // Top products (only from processing/shipped/delivered orders)
     const topProductsAgg = await Order.aggregate([
+      { $match: { status: { $in: ["processing", "shipped", "delivered"] } } },
       { $unwind: "$items" },
       { $match: { "items.product": { $ne: null } } },
       {
@@ -449,6 +454,7 @@ export const getStats = async (req, res) => {
       .json({ message: "Error fetching stats", error: err.message });
   }
 };
+
 
 /* ------------------ Categories & Brands ------------------ */
 export const categories = async (req, res) => {
