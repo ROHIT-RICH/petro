@@ -27,8 +27,7 @@ export const createOnlinePaymentOrder = async (req, res) => {
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ message: "Order not found" });
 
-    // Ensure total includes shipping
-    const totalAmount = order.total; // should already include shipping
+    const totalAmount = order.total;
     const amountInPaise = Math.round(totalAmount * 100);
 
     const rzpOrder = await razorpay.orders.create({
@@ -37,7 +36,6 @@ export const createOnlinePaymentOrder = async (req, res) => {
       notes: { orderId },
     });
 
-    // Create or update Payment record
     let payment = await Payment.findOne({ order: order._id, mode: "online" });
     if (!payment) {
       payment = new Payment({
@@ -74,15 +72,13 @@ export const verifyOnlinePayment = async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, orderId } = req.body;
 
-    if (razorpay) {
-      const sign = `${razorpay_order_id}|${razorpay_payment_id}`;
-      const expectedSign = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-        .update(sign)
-        .digest("hex");
+    const sign = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const expectedSign = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(sign)
+      .digest("hex");
 
-      if (razorpay_signature !== expectedSign)
-        return res.status(400).json({ success: false, message: "Payment verification failed" });
-    }
+    if (razorpay_signature !== expectedSign)
+      return res.status(400).json({ success: false, message: "Payment verification failed" });
 
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ message: "Order not found" });
@@ -109,7 +105,6 @@ export const verifyOnlinePayment = async (req, res) => {
     order.status = "processing";
     await order.save();
 
-    // Clear user's cart
     if (order.user) {
       await Cart.findOneAndUpdate({ user: order.user }, { $set: { items: [] } });
     }
@@ -132,24 +127,69 @@ export const handleOnlineWebhook = async (req, res) => {
       .update(JSON.stringify(req.body))
       .digest("hex");
 
-    if (digest !== signature) return res.status(400).json({ message: "Invalid webhook signature" });
+    if (digest !== signature) {
+      console.warn("❌ Invalid webhook signature:", signature);
+      return res.status(400).json({ message: "Invalid webhook signature" });
+    }
 
     const event = req.body.event;
     const entity = req.body.payload?.payment?.entity;
+    const orderEntity = req.body.payload?.order?.entity;
+
+    // Log every incoming webhook for debugging
+    console.log("🔔 Razorpay Webhook Event Received:", event);
+    console.log("Payload:", JSON.stringify(req.body, null, 2));
+
+    if (event === "payment.authorized") {
+      const payment = await Payment.findOne({ transactionId: entity.order_id });
+      if (payment) {
+        payment.status = "authorized";
+        await payment.save();
+        console.log(`✅ Payment ${payment._id} marked as authorized`);
+      }
+    }
 
     if (event === "payment.captured") {
-      const { order_id, id: paymentId } = entity;
-      const payment = await Payment.findOne({ transactionId: order_id });
-      if (!payment) return res.status(404).json({ message: "Payment not found for webhook" });
+      const payment = await Payment.findOne({ transactionId: entity.order_id });
+      if (payment) {
+        payment.status = "success";
+        payment.transactionId = entity.id;
+        await payment.save();
 
-      payment.status = "success";
-      payment.transactionId = paymentId;
-      await payment.save();
+        await Order.findByIdAndUpdate(payment.order, { status: "processing", payment: payment._id });
+        const order = await Order.findById(payment.order);
+        if (order?.user) await Cart.findOneAndUpdate({ user: order.user }, { $set: { items: [] } });
+        console.log(`✅ Payment ${payment._id} captured, order ${order._id} updated`);
+      }
+    }
 
-      await Order.findByIdAndUpdate(payment.order, { status: "processing", payment: payment._id });
+    if (event === "payment.failed") {
+      const payment = await Payment.findOne({ transactionId: entity.order_id });
+      if (payment) {
+        payment.status = "failed";
+        payment.failureReason = `${entity.error_code}: ${entity.error_description}`;
+        await payment.save();
+        await Order.findByIdAndUpdate(payment.order, { status: "payment_failed" });
+        console.log(`❌ Payment ${payment._id} failed: ${payment.failureReason}`);
+      }
+    }
 
-      const order = await Order.findById(payment.order);
-      if (order?.user) await Cart.findOneAndUpdate({ user: order.user }, { $set: { items: [] } });
+    if (event === "order.paid") {
+      const order = await Order.findOne({ razorpayOrderId: orderEntity.id });
+      if (order) {
+        order.status = "processing";
+        order.amountPaid = orderEntity.amount_paid;
+        await order.save();
+
+        const payment = await Payment.findOne({ order: order._id });
+        if (payment) {
+          payment.status = "success";
+          await payment.save();
+        }
+
+        if (order.user) await Cart.findOneAndUpdate({ user: order.user }, { $set: { items: [] } });
+        console.log(`✅ Order ${order._id} paid and cart cleared`);
+      }
     }
 
     res.json({ status: "ok" });
@@ -159,11 +199,12 @@ export const handleOnlineWebhook = async (req, res) => {
   }
 };
 
+
 /** ---------------------------
  * 4️⃣ COD Payment (disabled)
  ----------------------------*/
 export const updateCodPayment = async (req, res) => {
-  return res.status(403).json({
+  res.status(403).json({
     success: false,
     message: "Cash on Delivery is currently unavailable. Please use Online Payment.",
   });

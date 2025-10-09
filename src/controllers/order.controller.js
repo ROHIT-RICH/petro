@@ -284,10 +284,29 @@ export const updateOrderStatus = async (req, res) => {
     const order = await Order.findById(id).populate("paymentDetails");
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
+    // Prevent delivered → cancelled
     if (order.status === "delivered" && status === "cancelled") {
       return res.status(400).json({ success: false, message: "Delivered orders cannot be cancelled" });
     }
 
+    // ✅ Deduct stock only when moving to "processing" or "shipped"
+    if (["processing", "shipped"].includes(status) && ["pending"].includes(order.status)) {
+      for (const item of order.items) {
+        if (item.variantId) {
+          await Product.updateOne(
+            { _id: item.product, "variants._id": item.variantId, "variants.stock": { $gte: item.quantity } },
+            { $inc: { "variants.$.stock": -item.quantity, sold: item.quantity } }
+          );
+        } else {
+          await Product.updateOne(
+            { _id: item.product, stock: { $gte: item.quantity } },
+            { $inc: { stock: -item.quantity, sold: item.quantity } }
+          );
+        }
+      }
+    }
+
+    // Restore stock if cancelling
     if (status === "cancelled" && order.status !== "cancelled") {
       for (const item of order.items) {
         if (item.variantId) {
@@ -316,6 +335,7 @@ export const updateOrderStatus = async (req, res) => {
     res.status(400).json({ success: false, message: err.message || "Update failed" });
   }
 };
+
 
 /** ---------------------------
  * Create pending order (online checkout)
