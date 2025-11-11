@@ -1,328 +1,128 @@
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
-import bcrypt from "bcryptjs";
 
-/* ---------------------------------
-   Helper: Sign JWT
---------------------------------- */
-const signToken = (user) =>
-  jwt.sign(
-    {
-      id: user._id,
-      phone: user.phone,
-      role: user.role,
-      name: user.name,
-    },
-    process.env.JWT_SECRET || "secret",
+const signToken = (user) => {
+  return jwt.sign(
+    { id: user._id, email: user.email, role: user.role, name: user.name, phone: user.phone, address: user.addresses },
+    process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
+};
 
-/* =========================================================
-   Register (with Referral & Wallet credit)
-========================================================= */
 export const register = async (req, res) => {
-  console.log("[REGISTER] Body:", req.body);
   try {
-    const { name, email, phone, password, role, referralCode } = req.body;
+    const { name, email, phone, password, role } = req.body;
+    if (!name || !email || !phone || !password) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+    const exists = await User.findOne({ email });
+    if (exists) return res.status(400).json({ message: "Email already in use" });
 
-    if (!name || !email || !phone || !password)
-      return res.status(400).json({ success: false, message: "All fields are required" });
-
-    const existingUser = await User.findOne({ phone });
-    if (existingUser)
-      return res.status(400).json({ success: false, message: "User already exists with this phone" });
-
-    // Generate unique referral code
-    let newReferralCode;
-    do {
-      newReferralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-    } while (await User.findOne({ referralCode: newReferralCode }));
-
-    const newUser = new User({
+    const user = await User.create({
       name,
       email,
       phone,
       password,
       role: role === "admin" ? "admin" : "buyer",
-      referralCode: newReferralCode,
-      referredBy: referralCode || null,
-      wallet: 0,
     });
-
-    // Handle referral reward
-    let referrerReward = 0;
-    if (referralCode) {
-      const referrer = await User.findOne({ referralCode });
-      if (referrer) {
-        referrer.wallet += 50; // credit reward
-        await referrer.save();
-        referrerReward = 50;
-        console.log(`[REGISTER] Rewarded ₹${referrerReward} to referrer ${referrer.phone}`);
-      }
-    }
-
-    await newUser.save();
-
-    return res.status(201).json({
-      success: true,
-      message: "User registered successfully",
-      user: {
-        id: newUser._id,
-        name: newUser.name,
-        phone: newUser.phone,
-        wallet: newUser.wallet,
-      },
-      referralCode: newReferralCode,
-      referrerReward,
-    });
-  } catch (err) {
-    console.error("[REGISTER ERROR]", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
-  }
-};
-
-
-/* =========================================================
-   Send OTP
-========================================================= */
-export const sendOTP = async (req, res) => {
-  console.log("[SEND OTP] Request body:", req.body);
-  try {
-    const { phone } = req.body;
-    if (!phone) {
-      console.warn("[SEND OTP] Phone number missing");
-      return res.status(400).json({ success: false, message: "Phone number is required" });
-    }
-
-    let user = await User.findOne({ phone });
-    if (!user) {
-      user = await User.create({
-        name: "New User",
-        email: `${phone}@temp.com`,
-        phone,
-        password: "dummy12345",
-        role: "buyer",
-        wallet: 0,
-      });
-      console.log("[SEND OTP] Temporary user created:", phone);
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = Date.now() + 5 * 60 * 1000;
-
-    user.otp = otp;
-    user.otpExpires = otpExpires;
-    await user.save();
-
-    console.log(`📱 OTP for ${phone}: ${otp} (expires in 5 min)`);
-
-    return res.status(200).json({
-      success: true,
-      message: "OTP sent successfully (check console)",
-    });
-  } catch (err) {
-    console.error("[SEND OTP] Error:", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
-  }
-};
-
-/* =========================================================
-   Verify OTP
-========================================================= */
-export const verifyOTP = async (req, res) => {
-  console.log("[VERIFY OTP] Request body:", req.body);
-  try {
-    const { phone, otp } = req.body;
-    if (!phone || !otp) {
-      console.warn("[VERIFY OTP] Phone or OTP missing");
-      return res.status(400).json({ success: false, message: "Phone and OTP are required" });
-    }
-
-    const user = await User.findOne({ phone });
-    if (!user) {
-      console.warn("[VERIFY OTP] User not found:", phone);
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    if (!user.otp || !user.otpExpires) {
-      console.warn("[VERIFY OTP] No OTP requested for this number:", phone);
-      return res.status(400).json({ success: false, message: "No OTP requested for this number" });
-    }
-
-    if (user.otp !== otp) {
-      console.warn("[VERIFY OTP] Invalid OTP entered:", otp);
-      return res.status(400).json({ success: false, message: "Invalid OTP" });
-    }
-
-    if (Date.now() > user.otpExpires) {
-      console.warn("[VERIFY OTP] OTP expired for user:", phone);
-      return res.status(400).json({ success: false, message: "OTP expired" });
-    }
-
-    user.otp = null;
-    user.otpExpires = null;
-    await user.save();
-    console.log("[VERIFY OTP] OTP verified for user:", phone);
 
     const token = signToken(user);
-
-    return res.status(200).json({
-      success: true,
-      message: "OTP verified successfully",
+    res.status(201).json({
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        phone: user.phone,
-        role: user.role,
-        wallet: user.wallet,
-        referralCode: user.referralCode,
-        referredBy: user.referredBy,
-      },
+      user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role },
     });
-  } catch (err) {
-    console.error("[VERIFY OTP] Error:", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  } catch (e) {
+    console.error("Register error:", e);
+    res.status(500).json({ message: e.message });
   }
 };
-/* =========================================================
-   Login via email/password
-========================================================= */
+
 export const login = async (req, res) => {
   try {
-    let { emailOrPhone, password } = req.body;
-    emailOrPhone = emailOrPhone?.trim();
-    password = password?.trim();
-
-    if (!emailOrPhone || !password) return res.status(400).json({ success: false, message: "Email/Phone and Password required" });
-
-    const user = await User.findOne({ $or: [{ email: emailOrPhone }, { phone: emailOrPhone }] });
-    if (!user) return res.status(400).json({ success: false, message: "Invalid credentials" });
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ success: false, message: "Invalid credentials" });
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user) return res.status(400).json({ message: "Invalid credentials" });
+    const ok = await user.comparePassword(password);
+    if (!ok) return res.status(400).json({ message: "Invalid credentials" });
 
     const token = signToken(user);
-
-    return res.status(200).json({
-      success: true,
-      message: "Login successful",
+    res.json({
       token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        wallet: user.wallet,
-        referralCode: user.referralCode,
-        referredBy: user.referredBy,
-        addresses: user.addresses || [],
-        favorites: user.favorites || [],
-      },
+      user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role, address: user.addresses },
     });
-  } catch (err) {
-    console.error("[LOGIN] Error:", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 };
 
+// Helper to normalize/validate address objects including recipient fields
+const normalizeAddress = (a = {}) => ({
+  recipientName: String(a.recipientName || "").trim(),
+  recipientPhone: String(a.recipientPhone || "").trim(),
+  line1: String(a.line1 || "").trim(),
+  line2: String(a.line2 || "").trim(),
+  city: String(a.city || "").trim(),
+  state: String(a.state || "").trim(),
+  postalCode: String(a.postalCode || "").trim(),
+  country: String(a.country || "India").trim(),
+  isDefault: !!a.isDefault,
+});
 
+const validateAddress = (a) => {
+  if (!a.recipientName) return "Recipient name is required";
+  if (!/^\d{10}$/.test(a.recipientPhone)) return "Valid 10-digit recipient phone required";
+  if (!a.line1) return "Address line 1 is required";
+  if (!a.city) return "City is required";
+  if (!a.state) return "State is required";
+  if (!/^\d{5,6}$/.test(a.postalCode)) return "Valid postal code required";
+  if (!a.country) return "Country is required";
+  return null;
+};
 
-/* =========================================================
-   Update Profile
-========================================================= */
 export const updateProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user?.id);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
 
+    // Basic fields (unchanged unless explicitly provided)
     user.name = req.body.name ?? user.name;
     user.email = req.body.email ?? user.email;
+    if (req.body.password) user.password = req.body.password;
 
-    if (req.body.password) user.password = await bcrypt.hash(req.body.password, 10);
-
+    // Addresses: accept full replacement array; normalize and validate
     if (Array.isArray(req.body.addresses)) {
-      user.addresses = req.body.addresses.map((a) => ({
-        recipientName: a.recipientName?.trim() || "",
-        recipientPhone: a.recipientPhone?.trim() || "",
-        line1: a.line1?.trim() || "",
-        line2: a.line2?.trim() || "",
-        city: a.city?.trim() || "",
-        state: a.state?.trim() || "",
-        postalCode: a.postalCode?.trim() || "",
-        country: a.country?.trim() || "India",
-        isDefault: !!a.isDefault,
-      }));
+      const incoming = req.body.addresses.map(normalizeAddress);
+      for (const a of incoming) {
+        const err = validateAddress(a);
+        if (err) return res.status(400).json({ message: err });
+      }
+
+      // Ensure only one default if multiple marked
+      const hasDefault = incoming.some((a) => a.isDefault);
+      if (!hasDefault && incoming.length > 0) {
+        incoming.isDefault = true; // FIX: index into array
+      } else if (hasDefault) {
+        let marked = false;
+        for (const a of incoming) {
+          if (a.isDefault) {
+            if (!marked) marked = true;
+            else a.isDefault = false;
+          }
+        }
+      }
+
+      user.addresses = incoming;
     }
 
     await user.save();
 
-    return res.status(200).json({
-      success: true,
-      message: "Profile updated successfully",
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        wallet: user.wallet,
-        referralCode: user.referralCode,
-        referredBy: user.referredBy,
-        addresses: user.addresses || [],
-        favorites: user.favorites || [],
-      },
+    res.json({
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      addresses: user.addresses,
     });
   } catch (err) {
-    console.error("[UPDATE PROFILE] Error:", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
-  }
-};
-
-/* =========================================================
-   GENERATE REFERRAL LINK
-========================================================= */
-export const generateReferralLink = async (req, res) => {
-  try {
-    const user = await User.findById(req.user?.id);
-    if (!user)
-      return res.status(404).json({ success: false, message: "User not found" });
-
-    const referralLink = `${process.env.CLIENT_URL}/signup?ref=${user.referralCode}`;
-
-    return res.status(200).json({
-      success: true,
-      referralLink,
-      message: "Referral link generated successfully",
-    });
-  } catch (err) {
-    console.error("[GENERATE REFERRAL LINK ERROR]", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
-  }
-};
-
-/* =========================================================
-   GET REFERRAL STATS
-========================================================= */
-export const getReferralStats = async (req, res) => {
-  try {
-    const user = await User.findById(req.user?.id);
-    if (!user)
-      return res.status(404).json({ success: false, message: "User not found" });
-
-    const referrals = await User.find({ referredBy: user.referralCode });
-    return res.status(200).json({
-      success: true,
-      totalReferrals: referrals.length,
-      referrals: referrals.map((r) => ({
-        name: r.name,
-        phone: r.phone,
-        wallet: r.wallet,
-      })),
-    });
-  } catch (err) {
-    console.error("[GET REFERRAL STATS ERROR]", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+    res.status(500).json({ message: "Server error" });
   }
 };

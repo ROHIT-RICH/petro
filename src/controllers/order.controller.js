@@ -3,7 +3,6 @@ import Order from "../models/Order.js";
 import Cart from "../models/Cart.js";
 import Product from "../models/Product.js";
 import Payment from "../models/Payment.js";
-import Coupon from "../models/Coupon.js";
 
 /** ---------------------------
  * Helper: Get stock for a product/variant
@@ -24,42 +23,20 @@ export const createOrder = async (req, res) => {
   session.startTransaction();
 
   try {
-    const {
-      paymentId,
-      customer,
-      address,
-      paymentMode,
-      items: selectedItems,
-      shipping = 0,
-      discount = 0,
-      couponCode = null,
-    } = req.body;
-
-    const userId =
-      req.user?.id ||
-      (customer && (customer._id || customer.id)) ||
-      null;
-
-    console.log("🛒 createOrder called with:", {
-      userId,
-      paymentMode,
-      shipping,
-      couponCode,
-      selectedItemsCount: selectedItems?.length,
-    });
+    const { paymentId, customer, address, paymentMode, items: selectedItems, shipping = 0 } = req.body;
+    console.log("🔔 createOrder called with:", { customer, address, paymentMode, shipping, selectedItems });
 
     if (!Array.isArray(selectedItems) || selectedItems.length === 0) {
-      await session.abortTransaction();
-      return res
-        .status(400)
-        .json({ success: false, message: "No items selected" });
+      console.log("❌ No items in request");
+      return res.status(400).json({ success: false, message: "No items selected" });
     }
 
     const items = [];
 
-    // ✅ Step 1 — Process items
     for (const i of selectedItems) {
-      const productId = i.product?._id || i.product;
+      const productId = i.product._id || i.product;
+      console.log("📌 Fetching product:", productId);
+
       const product = await Product.findById(productId).session(session);
       if (!product) throw new Error("Invalid product in order");
 
@@ -67,121 +44,76 @@ export const createOrder = async (req, res) => {
       let variantSnapshot = null;
 
       if (i.variantId) {
-        const variant = product.variants.id(i.variantId);
-        if (!variant)
-          throw new Error(`Invalid variant for ${product.title}`);
+        const variantIdObj = mongoose.Types.ObjectId.isValid(i.variantId)
+          ? new mongoose.Types.ObjectId(i.variantId)
+          : i.variantId;
 
+        console.log("🟡 Variant check:", {
+          productId: product._id,
+          variantIdSent: i.variantId,
+          variantIdNormalized: variantIdObj,
+          availableVariants: product.variants.map(v => ({
+            id: v._id,
+            stock: v.stock,
+            price: v.price,
+          })),
+        });
+
+        const variant = product.variants.id(variantIdObj);
+        if (!variant) throw new Error(`Invalid variant for ${product.title}`);
         finalPrice = i.price ?? variant.price;
         variantSnapshot = { ...variant.toObject(), price: finalPrice };
+
+        console.log("✅ Variant found:", variantSnapshot);
       }
 
-      // Stock check
       if (i.quantity > getItemStock(product, i.variantId)) {
         throw new Error(`Insufficient stock for ${product.title}`);
       }
 
-      // Deduct stock
-      if (i.variantId) product.variants.id(i.variantId).stock -= i.quantity;
-      else product.stock -= i.quantity;
-      product.sold += i.quantity;
+      // Update stock
+      if (i.variantId) {
+        console.log(`📉 Deducting stock from variant ${i.variantId}`);
+        product.variants.id(i.variantId).stock -= i.quantity;
+      } else {
+        console.log("📉 Deducting stock from main product");
+        product.stock -= i.quantity;
+      }
 
+      product.sold += i.quantity;
       await product.save({ session });
 
-      items.push({
+      const orderItem = {
         product: product._id,
         variantId: i.variantId || null,
         variant: variantSnapshot,
         title: product.title || product.name,
         price: finalPrice,
         quantity: Number(i.quantity),
-        subtotal: finalPrice * Number(i.quantity),
-      });
+        subtotal: finalPrice * i.quantity,
+      };
+
+      console.log("📦 Order item prepared:", orderItem);
+      items.push(orderItem);
     }
 
-    // ✅ Step 2 — Totals
-    const grossTotal =
-      items.reduce((sum, i) => sum + i.subtotal, 0) + Number(shipping);
+    const total = items.reduce((sum, i) => sum + i.subtotal, 0) + Number(shipping);
+    console.log("📝 Order summary:", { items, shipping, totalComputed: total });
 
-    let appliedDiscount = 0;
-    let appliedCoupon = null;
-    let couponDoc = null;
+    // Create order
+    let [order] = await Order.create([{
+      user: req.user.id,
+      items,
+      total,
+      shipping,
+      status: "pending",
+      customer,
+      address
+    }], { session });
 
-    // ✅ Step 3 — First order auto welcome coupon
-    let previousOrders = 0;
-    if (userId) {
-      previousOrders = await Order.countDocuments({ user: userId });
-    }
+    console.log("📌 Order document created:", order._id);
 
-    const isFirstOrder = previousOrders === 0;
-    console.log("✅ First order:", isFirstOrder);
-
-    if (isFirstOrder && !couponCode) {
-      couponDoc = await Coupon.findOne({
-        code: "WELCOME50",
-        isActive: true,
-      }).session(session);
-
-      if (couponDoc) {
-        appliedDiscount = couponDoc.discountValue;
-        appliedCoupon = couponDoc.code;
-        console.log("🎉 Welcome Coupon auto-applied:", appliedCoupon);
-      }
-    }
-
-    // ✅ Step 4 — Manual coupon overrides welcome coupon
-    if (couponCode) {
-      couponDoc = await Coupon.findOne({
-        code: couponCode,
-        isActive: true,
-      }).session(session);
-
-      if (!couponDoc) {
-        await session.abortTransaction();
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid or expired coupon" });
-      }
-
-      const minCartValue =
-        couponDoc.minCartValue || couponDoc.discountValue * 5;
-
-      if (grossTotal < minCartValue) {
-        await session.abortTransaction();
-        return res.status(400).json({
-          success: false,
-          message: `Coupon '${couponDoc.code}' is applicable only on orders above ₹${minCartValue}`,
-        });
-      }
-
-      appliedDiscount = couponDoc.discountValue;
-      appliedCoupon = couponDoc.code;
-      console.log("✅ Manual coupon applied:", appliedCoupon);
-    }
-
-    // ✅ Step 5 — Final total
-    const total = Math.max(grossTotal - appliedDiscount, 0);
-
-    // ✅ Step 6 — Create order
-    let [order] = await Order.create(
-      [
-        {
-          user: userId,
-          customer,
-          address,
-          items,
-          shipping,
-          discount: appliedDiscount,
-          total,
-          paymentId,
-          paymentMode,
-          couponCode: appliedCoupon,
-          status: "pending",
-        },
-      ],
-      { session }
-    );
-
-     // Create Payment document
+    // Create payment
     const [payment] = await Payment.create([{
       order: order._id,
       mode: paymentMode || "online",
@@ -192,66 +124,49 @@ export const createOrder = async (req, res) => {
 
     console.log("💰 Payment document created:", payment._id);
 
-    // attach payment to order and save
     order.payment = payment._id;
     await order.save({ session });
 
-    // Remove purchased items from the user's cart (if userId present)
-    if (userId) {
-      await Cart.updateOne(
-        { user: userId },
-        {
-          $pull: {
-            items: {
-              $or: selectedItems.map(s => ({
-                product: s.product?._id || s.product,
-                ...(s.variantId ? { variantId: s.variantId } : {}),
-              }))
-            }
+    // Remove items from cart
+    console.log("🗑️ Removing items from cart:", selectedItems.map(s => ({
+      product: s.product._id || s.product,
+      variantId: s.variantId || null
+    })));
+
+    await Cart.updateOne(
+      { user: req.user.id },
+      {
+        $pull: {
+          items: {
+            $or: selectedItems.map(s => ({
+              product: s.product._id || s.product,
+              ...(s.variantId ? { variantId: s.variantId } : {})
+            }))
           }
-        },
-        { session }
-      );
-      console.log("🗑️ Removed items from cart for user:", userId);
-    }
+        }
+      },
+      { session }
+    );
 
-    // Mark coupon as used (if any)
-    if (couponDoc && userId) {
-      couponDoc.usedBy = couponDoc.usedBy || [];
-      couponDoc.usedBy.push({ userId, orderId: order._id });
-      couponDoc.usageCount = (couponDoc.usageCount || 0) + 1;
-      await couponDoc.save({ session });
-      console.log(`🎟️ Coupon ${couponDoc.code} marked used by ${userId}`);
-    }
-
-    // Commit once after all DB ops
     await session.commitTransaction();
 
-    // populate order for response
     order = await Order.findById(order._id)
       .populate("user", "name email phone")
       .populate("items.product")
-      .populate("payment")
-      .lean();
+      .populate("paymentDetails");
 
     console.log("✅ Final order created successfully:", order._id);
 
-    return res.status(201).json({ success: true, data: order, message: "Order created successfully" });
+    res.status(201).json({ success: true, data: order, message: "Order created successfully" });
 
   } catch (err) {
-    // rollback on any error
     await session.abortTransaction();
     console.error("❌ Order failed:", err);
-    return res.status(400).json({ success: false, message: err.message || "Order failed" });
+    res.status(400).json({ success: false, message: err.message || "Order failed" });
   } finally {
     session.endSession();
   }
 };
-
-
-
-
-   
 
 
 /** ---------------------------
@@ -427,7 +342,7 @@ export const updateOrderStatus = async (req, res) => {
  ----------------------------*/
 export const createPendingOrder = async (req, res) => {
   try {
-    const { customer, address, items: selectedItems, shipping = 0, discount = 0, couponCode = null, } = req.body;
+    const { customer, address, items: selectedItems, shipping = 0 } = req.body;
     console.log("🔔 createPendingOrder called with:", { customer, address, shipping, selectedItems });
 
     if (!Array.isArray(selectedItems) || selectedItems.length === 0) {
@@ -482,8 +397,7 @@ export const createPendingOrder = async (req, res) => {
       items.push(orderItem);
     }
 
-    const grossTotal = items.reduce((sum, i) => sum + i.subtotal, 0) + Number(shipping);
-    const total = Math.max(grossTotal - discount, 0); // ✅ Apply discount here too
+    const total = items.reduce((sum, i) => sum + i.subtotal, 0) + Number(shipping);
     console.log("📝 Pending order summary:", { items, shipping, totalComputed: total });
 
     let order = await Order.create({
