@@ -67,7 +67,7 @@ app.use(morgan("dev"));
 // ✅ CORS Configuration
 // ------------------------
 const allowedOrigins = [
-  // "http://localhost:5173",
+  "http://localhost:5173",
   "https://thepetroshop.com",
   // "https://admin.thepetroshop.com",
 ];
