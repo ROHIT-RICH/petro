@@ -1,9 +1,11 @@
 import { v2 as cloudinary } from "cloudinary";
-import { CloudinaryStorage } from "multer-storage-cloudinary";
+import pkg from "multer-storage-cloudinary";
 import multer from "multer";
 import dotenv from "dotenv";
 
 dotenv.config();
+
+const { CloudinaryStorage } = pkg;
 
 cloudinary.config({
   cloud_name: process.env.CLOUD_NAME,
@@ -14,8 +16,8 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
-    folder: "products",          // Folder name in Cloudinary
-    allowed_formats: ["webp","jpg", "jpeg", "png"],
+    folder: "products",
+    allowed_formats: ["webp", "jpg", "jpeg", "png"],
   },
 });
 
