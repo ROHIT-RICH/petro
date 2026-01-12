@@ -8,7 +8,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import rateLimit from "express-rate-limit";
 import { connectDB } from "./config/db.js";
-const client = require("prom-client");
+import client from "prom-client";
+
 
 // 🧩 Import Routes (All files use *.routes.js convention)
 import authRoutes from "./routes/auth.routes.js";
