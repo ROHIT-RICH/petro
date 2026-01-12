@@ -8,6 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import rateLimit from "express-rate-limit";
 import { connectDB } from "./config/db.js";
+const client = require("prom-client");
 
 // 🧩 Import Routes (All files use *.routes.js convention)
 import authRoutes from "./routes/auth.routes.js";
@@ -36,6 +37,8 @@ dotenv.config({ path: path.join(__dirname, "../.env") });
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+const collectDefaultMetrics = client.collectDefaultMetrics;
+collectDefaultMetrics();
 
 // ------------------------
 // ✅ Trust Proxy
@@ -108,8 +111,8 @@ const otpLimiter = rateLimit({
   },
 });
 
-const collectDefaultMetrics = client.collectDefaultMetrics;
-collectDefaultMetrics();
+
+
 
 app.get("/metrics", async (req, res) => {
   res.set("Content-Type", client.register.contentType);
