@@ -1,9 +1,14 @@
 import { v2 as cloudinary } from "cloudinary";
-import multerStorage from "multer-storage-cloudinary";
 import multer from "multer";
 import dotenv from "dotenv";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
 
 dotenv.config();
+
+// CommonJS require (bypasses ESM problems)
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
 
 cloudinary.config({
   cloud_name: process.env.CLOUD_NAME,
@@ -11,8 +16,7 @@ cloudinary.config({
   api_secret: process.env.CLOUD_API_SECRET,
 });
 
-// THIS is the important change 👇
-const storage = new multerStorage.CloudinaryStorage({
+const storage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: "products",
